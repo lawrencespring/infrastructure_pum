@@ -1,0 +1,113 @@
+# name: Build
+# on:
+#   push:
+#     branch:
+#       - "*"
+# env:
+#   DOCKER_LOGIN: ${{ secrets.DOCKER_LOGIN }}
+#   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+#   HELM_CHART_REPO: ${{ secrets.HELM_CHART_REPO }}
+
+# jobs:
+#   tag:
+#     runs-on: [self-hosted, erbil]
+#     steps:
+#       - name: tag
+#         shell: bash
+#         run: |
+#           echo "tag"
+
+#       - if: >
+#           contains(github.event.head_commit.message, '[tag]') ||
+#           contains(github.event.head_commit.message, '[release]' )
+#         uses: actions/checkout@v2
+#         with:
+#           fetch-depth: 0
+
+#       - name: "check base tag"
+#         if: >
+#           contains(github.event.head_commit.message, '[tag]') ||
+#           contains(github.event.head_commit.message, '[release]' )
+#         shell: bash
+#         run: |
+#           set +e
+#           echo "##############"
+#           echo "${{ github.event.head_commit.message }}"
+#           echo "##############"
+#           latest_tag=$(git describe --tags --abbrev=0)
+#           if [ $? -eq 0 ] && [[ "$latest_tag" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
+#             echo "Base tag exists: $latest_tag"
+#               if [[ "${{ github.event.head_commit.message }}" == *"[tag]"* ]]; then
+#                 new_patch=$(echo "$latest_tag" | awk '{split($0,a,"."); tmp=(a[3]+1); print a[1]"."a[2]"."tmp}')
+#                 echo "Bumping up minor to $new_patch"
+#                 git tag "$new_patch"
+#               fi
+#               if [[ "${{ github.event.head_commit.message }}" == *"[release]"* ]]; then
+#                 echo "Bumping up minor"
+#                 new_minor=$(echo "$latest_tag" | awk '{split($0,a,"."); tmp=(a[2]+1); print a[1]"."tmp".0"}')
+#                 echo "Bumping up minor to $new_minor"
+#                 git tag "$new_minor"
+#               fi
+#           else
+#             echo "No tags present, adding default"
+#             git tag 0.0.1
+#           fi
+#           git push --tags
+
+#   assembly:
+#     needs:
+#       - "tag"
+
+#     runs-on: [self-hosted, erbil]
+#     steps:
+#       - uses: actions/checkout@v2
+#         with:
+#           fetch-depth: 0
+
+#       - name: "assemble"
+#         run: |
+#           chmod +x .github/scripts/chart_assembly.sh
+#           ./.github/scripts/chart_assembly.sh
+
+#       - name: "lint"
+#         run: helm lint
+
+#   publish:
+#     if: >
+#       contains(github.event.head_commit.message, '[tag]') ||
+#       contains(github.event.head_commit.message, '[release]' )
+#     needs:
+#       - "tag"
+#       - "assembly"
+
+#     runs-on: [self-hosted, erbil]
+#     steps:
+#       - name: "unpack gpg key"
+#         run: gpg --dearmor <<< '${{ secrets.HELM_SIGN_PRIVATE_KEY }}' > helm-sign-private-key.asc
+
+#       - name: "set target chart repository"
+#         shell: bash
+#         run: |
+#           if [ "$(echo ${GITHUB_REF#refs/heads/})" = "master" ]
+#             then
+#               echo "##[set-output name=repo;]${{ secrets.HELM_CHART_STABLE }}"
+#             else
+#               echo "##[set-output name=repo;]${{ secrets.HELM_CHART_INCUBATOR }}"
+#           fi
+#         id: set_repo
+
+#       - name: "package chart"
+#         run: |
+#           helm package . \
+#               --version "$(git describe --tags --abbrev=0)" \
+#               --sign \
+#               --keyring helm-sign-private-key.asc \
+#               --key ubu@runner
+
+#       - name: "upload chart and provenance"
+#         run: |
+#           curl -sS -u "$DOCKER_LOGIN:$DOCKER_PASSWORD" \
+#           -X POST "https://$HELM_CHART_REPO/api/chartrepo/${{ steps.set_repo.outputs.repo }}/charts" \
+#           -H "Content-Type: multipart/form-data" \
+#           -F "chart=@$(ls *.tgz)" \
+#           -F "prov=@$(ls *.tgz.prov)"

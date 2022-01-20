@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: pum
+  name: pum-sync
+  namespace: {{ .Values.pum_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: pum
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        io.kompose.service: pum
+    spec:
+      containers:
+      - image: harbor.hub.azure.lawrence-spring.com/lawrencespring/fib-monitoring-proxy:latest
+        command: [ "/bin/bash", "-ce", "python main.py" ]
+        #command: [ "/bin/bash", "-ce", "tail -f /dev/null" ]
+        imagePullPolicy: "Always"
+        name: pum-sync
+        resources: {}
+      restartPolicy: Always
+      serviceAccountName: ""
+      imagePullSecrets:
+      - name: regcred
+status: {}
